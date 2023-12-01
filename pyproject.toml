@@ -1,15 +1,7 @@
-[build-system]
-requires = [
-    "setuptools>=61.0.0",
-    "wheel"
-]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "geoapis"
 version = "0.3.2"
 description = "A package for downloading geospatial data from web APIs."
-readme = "README.md"
 authors = [{ name = "Rose pearson", email = "rose.pearson@niwa.co.nz" }]
 license = { file = "LICENSE" }
 classifiers = [
@@ -22,21 +14,26 @@ classifiers = [
 ]
 keywords = ["APIs", "LiDAR", "point clouds", "vector", "Geospatial data"]
 dependencies = [
-    "geopandas>=0.10",
-    "requests",
-    "boto3",
-    "python-dotenv",
-    "tqdm",
-    'tomli; python_version < "3.11"',
+    "geopandas>=0.13.2",
+    "requests>=2.31.0",
+    "tqdm>=4.66.1",
+    "shapely>=2.0.2",
+    "boto3>=1.33.5",
+    "numpy>=1.24.4",
 ]
-requires-python = ">=3.6"
+readme = "README.md"
+requires-python = ">= 3.8"
 
-[tool.setuptools]
-packages = ["geoapis"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[project.optional-dependencies]
-dev = ["black", "python-dotenv", "pip-tools", "pytest"]
+[tool.rye]
+managed = true
+dev-dependencies = [
+    "python-dotenv>=1.0.0",
+    "pytest>=7.4.3",
+]
 
-[project.urls]
-Homepage = "https://github.com/niwa/geoapis"
-Documentation = "https://github.com/niwa/geoapis/wiki"
+[tool.hatch.metadata]
+allow-direct-references = true
