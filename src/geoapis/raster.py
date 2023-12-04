@@ -4,18 +4,21 @@ Created on Fri Nov  7 10:10:55 2022
 
 @author: pearsonra
 """
-
-import urllib
-import requests
-import numpy
-import geopandas
 import abc
-import typing
-import pathlib
 import logging
+import pathlib
 import time
-import io
+import typing
+import urllib
 import zipfile
+
+import geopandas
+import geopandas as gpd
+import requests
+from progress.spinner import Spinner
+from tqdm import tqdm
+
+from src.geoapis.vector import Linz as LinzVector
 
 
 class KoordinatesExportsQueryBase(abc.ABC):
@@ -60,7 +63,7 @@ class KoordinatesExportsQueryBase(abc.ABC):
         key: str,
         cache_path: typing.Union[str, pathlib.Path],
         crs: int = None,
-        bounding_polygon: geopandas.geodataframe.GeoDataFrame = None,
+        bounding_polygon: geopandas.GeoSeries = None,
     ):
         """Load in the wfs key and CRS/bounding_polygon if specified. Specify the layer
         to import during run."""
@@ -125,7 +128,7 @@ class KoordinatesExportsQueryBase(abc.ABC):
                 " bbox to simplify the geometry"
             )
 
-    def run(self, layer: int) -> pathlib.Path:
+    def run(self, layer: int, index_tiles: int = None) -> None:
         """Query for a specified layer and return a geopandas.GeoDataFrame of the vector
         features. If a polygon_boundary is specified, only return vectors passing
         through this polygon."""
@@ -139,20 +142,85 @@ class KoordinatesExportsQueryBase(abc.ABC):
             "items": [{"item": f"{self.base_url}/layers/{layer}/"}],
         }
         if self.bounding_polygon is not None:
-            exterior = self.bounding_polygon.to_crs(self.K_CRS).exterior.loc[0]
-            api_query["extent"] = {
-                "type": self.bounding_polygon.type.loc[0],
-                "coordinates": [list(exterior.coords)],
-            }
+            polygon_chuck = (
+                gpd.GeoSeries(self.bounding_polygon.unary_union.buffer(0), crs=2193)
+                .explode(index_parts=False)
+                .reset_index(drop=True)
+            )
+            polygon_chuck = polygon_chuck.to_crs(self.K_CRS)
+            if (
+                len(polygon_chuck) == 1
+            ):  # member must be an array of LinearRing coordinate arrays
+                exterior = polygon_chuck.loc[0].exterior
+                query_coords = [list(exterior.coords)]
+                api_query["extent"] = {
+                    "type": "Polygon",
+                    "coordinates": query_coords,
+                }
         logging.info("Send initial request to download image")
         response = requests.post(
             url=f"{self.base_url}/exports/", headers=headers, json=api_query
         )
-        query_id = response.json()["id"]
+        try:
+            query_id = response.json()["id"]
+            name = response.json()["name"]
+            self.export(layer, name, query_id, headers)
+        except KeyError:
+            logging.warning("The query failed. Check the invalid_reasons")
+            vec = LinzVector(
+                key=self.key,
+                crs=self.crs,
+                bounding_polygon=self.bounding_polygon,
+            )
+            index_tiles = vec.get_features(index_tiles)
+            index_tiles.sort_values(by="tilename", inplace=True)
+            # split into chucks of 10000
+            n = 10000  # chunk row size
+            if len(index_tiles) < 10000:
+                n = int(len(index_tiles) / 2) + 1
+            index_chucks = [
+                index_tiles[i : i + n] for i in range(0, index_tiles.shape[0], n)
+            ]
+            for index_chunk in index_chucks:
+                print(index_chunk)
+                polygon_chuck = (
+                    gpd.GeoSeries(index_chunk.unary_union.buffer(0), crs=2193)
+                    .explode(index_parts=False)
+                    .reset_index(drop=True)
+                )
+                polygon_chuck = polygon_chuck.to_crs(self.K_CRS)
+                print(f"length of polygon_chuck is {len(polygon_chuck)}")
+                if (
+                    len(polygon_chuck) == 1
+                ):  # member must be an array of LinearRing coordinate arrays
+                    exterior = polygon_chuck.loc[0].exterior
+                    query_coords = [list(exterior.coords)]
+                    api_query["extent"] = {
+                        "type": "Polygon",
+                        "coordinates": query_coords,
+                    }
+                else:  # member must be an array of Polygon coordinate arrays
+                    query_coords = [
+                        [list(polygon.exterior.coords)] for polygon in polygon_chuck
+                    ]
+                    api_query["extent"] = {
+                        "type": "MultiPolygon",
+                        "coordinates": query_coords,
+                    }
+                response = requests.post(
+                    url=f"{self.base_url}/exports/", headers=headers, json=api_query
+                )
+                query_id = response.json()["id"]
+                name = response.json()["name"]
+                self.export(layer, name, query_id, headers)
+            pass
 
+    def export(self, layer: int, name: str, query_id: int, headers: dict) -> None:
         # Check the state of your exports until the triggered raster exports completes
         logging.info("Check status of download request")
+        spinner = Spinner("Generating export...")
         while True:
+            spinner.next()
             response = requests.get(
                 f"{self.base_url}/exports/",
                 headers=headers,
@@ -176,20 +244,41 @@ class KoordinatesExportsQueryBase(abc.ABC):
                 return
         # Download the completed export
         logging.info(f"Downloading {element['download_url']} to {self.cache_path}")
-        with requests.get(
-            element["download_url"],
-            headers={"Authorization": f"key {self.key}"},
-            stream=True,
-        ) as response:
-            response.raise_for_status()
-            zip_object = zipfile.ZipFile(io.BytesIO(response.content))
-            zip_object.extractall(self.cache_path / f"{layer}")
-        # Return the file names of the downloaded rasters
-        rasters = []
-        for file_name in (self.cache_path / f"{layer}").iterdir():
-            if file_name.suffix == ".tif":
-                rasters.append(file_name)
-        return rasters
+        zip_path = self.cache_path / f"{layer}.zip"
+        with open(zip_path, mode="wb") as zip_file:
+            with requests.get(
+                element["download_url"],
+                headers={"Authorization": f"key {self.key}"},
+                stream=True,
+            ) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("content-length", 0))
+                tqdm_params = {
+                    "desc": "Downloading raster",
+                    "total": total,
+                    "miniters": 1,
+                    "unit": "B",
+                    "unit_scale": True,
+                    "unit_divisor": 1024,
+                }
+                with tqdm(**tqdm_params) as progress_bar:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        progress_bar.update(len(chunk))
+                        zip_file.write(chunk)
+
+        with zipfile.ZipFile(zip_path) as zip_object:
+            # extract with progress bar
+            tqdm_params = {
+                "desc": "Extracting raster",
+                "total": len(zip_object.infolist()),
+                "miniters": 1,
+            }
+            for file in tqdm(zip_object.infolist(), **tqdm_params):
+                if name.startswith("lds-"):
+                    name = name[4:]
+                if name.endswith("-GTiff"):
+                    name = name[:-6]
+                zip_object.extract(file, self.cache_path / f"{name}")
 
 
 class Linz(KoordinatesExportsQueryBase):

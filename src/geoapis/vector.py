@@ -136,12 +136,10 @@ class WfsQueryBase(abc.ABC):
         # If a geometry_name was specified use this, otherwise try the standard LINZ
         # ones
         if geometry_name is not None and geometry_name != "":
-
             response = self.query_vector_wfs_in_bounds(layer, bounds, geometry_name)
             response.raise_for_status()
             return response.json()
         else:
-
             # cycle through the standard geometry_name's - suppress errors and only
             # raise one if no valid responses
             for geometry_name in self.GEOMETRY_NAMES:
@@ -177,12 +175,10 @@ class WfsQueryBase(abc.ABC):
         # properties
         features = {"geometry": []}
         for feature in feature_collection["features"]:
-
             shapely_geometry = shapely.geometry.shape(feature["geometry"])
 
             # check intersection of tile and catchment in LINZ CRS
             if self.bounding_polygon.intersects(shapely_geometry).any():
-
                 # Create column headings for each 'properties' option from the first
                 # in-bounds vector
                 if len(features["geometry"]) == 0:
@@ -254,7 +250,6 @@ class WfsQueryBase(abc.ABC):
         # properties
         features = {"geometry": []}
         for feature in feature_collection["features"]:
-
             shapely_geometry = shapely.geometry.shape(feature["geometry"])
 
             # Create column headings for each 'properties' option from the first
@@ -267,7 +262,7 @@ class WfsQueryBase(abc.ABC):
             # Convert any one Polygon MultiPolygon to a straight Polygon then add to the
             # geometries
             if (
-                shapely_geometry.geometryType() == "MultiPolygon"
+                shapely_geometry.geom_type == "MultiPolygon"
                 and len(shapely_geometry.geoms) == 1
             ):
                 shapely_geometry = shapely_geometry.geoms[0]

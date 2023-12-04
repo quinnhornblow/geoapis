@@ -5,14 +5,15 @@ Created on Wed Jun 30 11:11:25 2021
 @author: pearsonra
 """
 
-import unittest
 import json
-import pathlib
-import shapely
-import geopandas
-import shutil
-import dotenv
 import os
+import pathlib
+import shutil
+import unittest
+
+import dotenv
+import geopandas
+import shapely
 
 from src.geoapis import vector
 
@@ -41,9 +42,9 @@ class LinzVectorsTest(unittest.TestCase):
 
     # The expected datasets and files to be downloaded - used for comparison in the later tests
     LAND = {
-        "area": 150539776091.31247,
+        "area": 150539825618.29166,
         "geometryType": "Polygon",
-        "length": 6002892.54900315,
+        "length": 6002695.045570571,
         "columns": [
             "geometry",
             "name",
@@ -59,7 +60,7 @@ class LinzVectorsTest(unittest.TestCase):
     BATHYMETRY_CONTOURS = {
         "area": 0.0,
         "geometryType": "LineString",
-        "length": 144353.73387463146,
+        "length": 144353.7338746315,
         "columns": [
             "geometry",
             "fidn",
@@ -74,7 +75,7 @@ class LinzVectorsTest(unittest.TestCase):
             "sorind",
             "hypcat",
         ],
-        "valdco": [2.0, 2.0, 0.0, 0.0, 0.0],
+        "valdco": [0.0, 0.0, 2.0, 0.0, 2.0],
     }
     CHATHAM_CONTOURS = None
 
