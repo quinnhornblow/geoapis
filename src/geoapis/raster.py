@@ -217,7 +217,7 @@ class KoordinatesExportsQueryBase(abc.ABC):
         logging.info("Check status of download request")
         with tqdm(
             total=1.0,
-            desc="Generating export...",
+            desc="Generating export",
             bar_format="{l_bar}{bar}| {elapsed}<{remaining}",
         ) as pbar:
             pbar.update(0)
@@ -298,6 +298,7 @@ class KoordinatesExportsQueryBase(abc.ABC):
                     )
                     continue
                 zip_object.extract(file, self.cache_path / f"{name}")
+        zip_path.unlink()
 
 
 class Linz(KoordinatesExportsQueryBase):
