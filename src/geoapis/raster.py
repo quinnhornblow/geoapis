@@ -15,10 +15,9 @@ import zipfile
 import geopandas
 import geopandas as gpd
 import requests
-from progress.spinner import Spinner
 from tqdm import tqdm
 
-from src.geoapis.vector import Linz as LinzVector
+from geoapis.vector import Linz as LinzVector
 
 
 class KoordinatesExportsQueryBase(abc.ABC):
@@ -175,21 +174,19 @@ class KoordinatesExportsQueryBase(abc.ABC):
             index_tiles = vec.get_features(index_tiles)
             index_tiles.sort_values(by="tilename", inplace=True)
             # split into chucks of 10000
-            n = 10000  # chunk row size
-            if len(index_tiles) < 10000:
+            n = 5000  # chunk row size
+            if len(index_tiles) < n:
                 n = int(len(index_tiles) / 2) + 1
             index_chucks = [
                 index_tiles[i : i + n] for i in range(0, index_tiles.shape[0], n)
             ]
             for index_chunk in index_chucks:
-                print(index_chunk)
                 polygon_chuck = (
                     gpd.GeoSeries(index_chunk.unary_union.buffer(0), crs=2193)
                     .explode(index_parts=False)
                     .reset_index(drop=True)
                 )
                 polygon_chuck = polygon_chuck.to_crs(self.K_CRS)
-                print(f"length of polygon_chuck is {len(polygon_chuck)}")
                 if (
                     len(polygon_chuck) == 1
                 ):  # member must be an array of LinearRing coordinate arrays
@@ -218,30 +215,46 @@ class KoordinatesExportsQueryBase(abc.ABC):
     def export(self, layer: int, name: str, query_id: int, headers: dict) -> None:
         # Check the state of your exports until the triggered raster exports completes
         logging.info("Check status of download request")
-        spinner = Spinner("Generating export...")
-        while True:
-            spinner.next()
-            response = requests.get(
-                f"{self.base_url}/exports/",
-                headers=headers,
-            )
-            # find the triggered export
-            element = [
-                element for element in response.json() if element["id"] == query_id
-            ][0]
-            logging.info(f"/texport state is {element['state']}")
-            if element["state"] == "processing":
-                logging.info("Not complete - check again in 20s")
-                time.sleep(20)
-                continue
-            elif element["state"] == "complete":
-                logging.info("/tCompleted - move to download")
-                break
-            else:
-                logging.warning(
-                    f"Could not download raster. Ended with status {element['state']}"
+        with tqdm(
+            total=1.0,
+            desc="Generating export...",
+            bar_format="{l_bar}{bar}| {elapsed}<{remaining}",
+        ) as pbar:
+            pbar.update(0)
+            while True:
+                response = requests.get(
+                    f"{self.base_url}/exports/",
+                    headers=headers,
                 )
-                return
+                # find the triggered export
+                element = [
+                    element for element in response.json() if element["id"] == query_id
+                ][0]
+                logging.info(f"/texport state is {element['state']}")
+                if element["state"] == "processing":
+                    progress_url = element["url"]
+                    with requests.get(
+                        progress_url,
+                        headers=headers,
+                    ) as progress_response:
+                        progress_response.raise_for_status()
+                        progress = progress_response.json()["progress"]
+                        if progress:
+                            pbar.update(progress - pbar.n)
+                        else:
+                            pbar.update(1 - pbar.n)
+                    logging.info("Not complete - check again in 20s")
+                    time.sleep(10)
+                    continue
+                elif element["state"] == "complete":
+                    pbar.update(1 - pbar.n)
+                    logging.info("/tCompleted - move to download")
+                    break
+                else:
+                    logging.warning(
+                        f"Could not download raster. Ended with status {element['state']}"
+                    )
+                    return
         # Download the completed export
         logging.info(f"Downloading {element['download_url']} to {self.cache_path}")
         zip_path = self.cache_path / f"{layer}.zip"
@@ -273,11 +286,17 @@ class KoordinatesExportsQueryBase(abc.ABC):
                 "total": len(zip_object.infolist()),
                 "miniters": 1,
             }
+            if name.startswith("lds-"):
+                name = name[4:]
+            if name.endswith("-GTiff"):
+                name = name[:-6]
             for file in tqdm(zip_object.infolist(), **tqdm_params):
-                if name.startswith("lds-"):
-                    name = name[4:]
-                if name.endswith("-GTiff"):
-                    name = name[:-6]
+                # check if the file exists
+                if (self.cache_path / f"{name}" / file.filename).exists():
+                    logging.warning(
+                        f"File {self.cache_path / f'{name}' / file.filename} already exists"
+                    )
+                    continue
                 zip_object.extract(file, self.cache_path / f"{name}")
 
 
